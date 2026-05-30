@@ -2,10 +2,17 @@
 // SUPABASE
 // ══════════════════════════════════════════════
 const { createClient } = supabase;
-const sb = createClient(
-  'https://djnicpnblpiwwctahfpn.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqbmljcG5ibHBpd3djdGFoZnBuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1NDY0MDcsImV4cCI6MjA5NTEyMjQwN30.vPsGzDWk9fMvnx34AZ60nInzRBp8Fx6-AWBOrfsUWyE'
-);
+
+// sb is initialised asynchronously after fetching config from the server.
+// Nothing runs until initSupabase() resolves — called at bottom of file.
+let sb;
+
+async function initSupabase() {
+  const res = await fetch('/config');
+  if (!res.ok) throw new Error('Could not load app config. Please refresh.');
+  const { url, key } = await res.json();
+  sb = createClient(url, key);
+}
 
 // ══════════════════════════════════════════════
 // ADMIN ROLE
@@ -252,20 +259,29 @@ async function signOut() {
   hideForgotPanel(); switchTab('signin');
 }
 
-sb.auth.onAuthStateChange((event, session) => {
-  if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
-    isAdmin = ADMIN_EMAILS.includes(session.user.email);
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').classList.add('visible');
-    document.getElementById('user-email-display').textContent = session.user.email;
-    applyRoleUI();
-    initApp();
-  } else if (event === 'SIGNED_OUT') {
-    isAdmin = false;
-    document.getElementById('app').classList.remove('visible');
-    document.getElementById('login-screen').style.display = 'flex';
+(async () => {
+  try {
+    await initSupabase();
+  } catch (e) {
+    toast(e.message || 'Failed to connect. Please refresh.', true);
+    return;
   }
-});
+
+  sb.auth.onAuthStateChange((event, session) => {
+    if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
+      isAdmin = ADMIN_EMAILS.includes(session.user.email);
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app').classList.add('visible');
+      document.getElementById('user-email-display').textContent = session.user.email;
+      applyRoleUI();
+      initApp();
+    } else if (event === 'SIGNED_OUT') {
+      isAdmin = false;
+      document.getElementById('app').classList.remove('visible');
+      document.getElementById('login-screen').style.display = 'flex';
+    }
+  });
+})();
 
 // ══════════════════════════════════════════════
 // UTILITIES
