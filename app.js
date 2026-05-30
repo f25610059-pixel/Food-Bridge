@@ -10,7 +10,12 @@ const sb = createClient(
 // ══════════════════════════════════════════════
 // ADMIN ROLE
 // ══════════════════════════════════════════════
-const ADMIN_EMAIL = 'zainab@nutech.edu.pk';
+const ADMIN_EMAILS = [
+  'zainab@nutech.edu.pk',
+  'ali.h@nutech.edu.pk',
+  'admin@gmail.com',
+  'zafarikomail@gmail.com'
+];
 let isAdmin = false;
 
 function applyRoleUI() {
@@ -248,14 +253,14 @@ async function signOut() {
 }
 
 sb.auth.onAuthStateChange((event, session) => {
-  if (session) {
-    isAdmin = session.user.email === ADMIN_EMAIL;
+  if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) {
+    isAdmin = ADMIN_EMAILS.includes(session.user.email);
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').classList.add('visible');
     document.getElementById('user-email-display').textContent = session.user.email;
     applyRoleUI();
     initApp();
-  } else {
+  } else if (event === 'SIGNED_OUT') {
     isAdmin = false;
     document.getElementById('app').classList.remove('visible');
     document.getElementById('login-screen').style.display = 'flex';
@@ -343,6 +348,7 @@ function navigate(page) {
     toast('Access denied. Admins only.', true);
     return;
   }
+  closeSidebar();
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
@@ -384,7 +390,7 @@ async function loadDashboard() {
     ? ei.map(f=>`<div class="activity-item"><div class="activity-dot"></div><div class="activity-text"><strong>${f.food_name}</strong> — ${f.quantity} units</div><span class="activity-time ${expiryClass(f.expiry_time)}">${fmt(f.expiry_time)}</span></div>`).join('')
     : emptyState('No items');
 
-  const {data:pr} = await sb.from('request').select('request_id,requested_quantity,request_status,receiver(name),donation(status)').eq('request_status','Pending').limit(5);
+  const {data:pr} = await sb.from('request').select('request_id,donation_id,requested_quantity,request_status,receiver(name),donation(status)').eq('request_status','Pending').limit(5);
   document.getElementById('pending-requests-dash').innerHTML = pr?.length
     ? `<div class="table-wrap"><table><thead><tr><th>Receiver</th><th>Donation</th><th>Qty</th><th>Status</th></tr></thead><tbody>${pr.map(r=>`<tr><td>${r.receiver?.name||'—'}</td><td>#${r.donation_id}</td><td>${r.requested_quantity}</td><td>${statusBadge(r.request_status)}</td></tr>`).join('')}</tbody></table></div>`
     : emptyState('No pending requests 🎉');
@@ -563,17 +569,21 @@ async function loadAvailableFood() {
 }
 
 function openRequestFor(donationId) {
-  // Pre-select the donation in the modal
-  const sel = document.getElementById('req-donation');
-  if (sel) {
-    sel.value = donationId;
-    // If value didn't stick (option not yet loaded), store for after populate
-    if (sel.value != donationId) sel.dataset.preselect = donationId;
-  }
-  // Force status to Pending for regular users
+  openModal('modal-add-request');
   const statusEl = document.getElementById('req-status');
   if (statusEl) statusEl.value = 'Pending';
-  openModal('modal-add-request');
+  // Try to preselect immediately; if not loaded yet, wait for populateSelects
+  const tryPreselect = () => {
+    const sel = document.getElementById('req-donation');
+    if (sel) {
+      sel.value = donationId;
+      if (sel.value != donationId) {
+        // Option not yet in DOM, retry once after populate
+        sel.dataset.preselect = donationId;
+      }
+    }
+  };
+  tryPreselect();
 }
 
 async function loadRequests() {
@@ -694,6 +704,8 @@ async function submitDonation() {
   const { data: existing } = await sb.from('donor').select('donor_id').eq('email', em).maybeSingle();
   if (existing) {
     donorId = existing.donor_id;
+    // Update donor info in case it changed
+    await sb.from('donor').update({ first_name: fn, last_name: ln, city: city || null }).eq('donor_id', donorId);
   } else {
     const { data: newDonor, error: de } = await sb.from('donor')
       .insert({ first_name: fn, last_name: ln, email: em, city: city || null })
@@ -788,7 +800,7 @@ async function addRequest() {
   if (parseFloat(qty)<=0) { showAlert('alert-request','Quantity must be greater than zero.'); return; }
   const btn = document.querySelector('#modal-add-request .btn-primary');
   btn.disabled=true; btn.textContent='💾 Saving…';
-  const {error} = await sb.from('request').insert({receiver_id:parseInt(rid),donation_id:parseInt(did),requested_quantity:parseFloat(qty),request_status:document.getElementById('req-status').value});
+  const {error} = await sb.from('request').insert({receiver_id:parseInt(rid),donation_id:parseInt(did),requested_quantity:parseFloat(qty),request_status:'Pending'});
   if (error) { showAlert('alert-request',error.message); btn.disabled=false; btn.textContent='💾 Save'; return; }
   toast('Request submitted!'); closeModal('modal-add-request'); btn.disabled=false; btn.textContent='💾 Save'; loadRequests();
 }
@@ -848,6 +860,13 @@ async function populateSelects() {
   fill('fi-donation',  allDonations.data, 'donation_id', d=>`#${d.donation_id} — ${d.donor?.first_name||'?'} (${d.status})`);
   fill('req-receiver', receivers.data,    'receiver_id', r=>r.name);
   fill('req-donation', donations.data,    'donation_id', d=>`#${d.donation_id} — ${d.donor?.first_name||'?'}`);
+
+  // Apply any pending preselect for request modal
+  const reqSel = document.getElementById('req-donation');
+  if (reqSel?.dataset.preselect) {
+    reqSel.value = reqSel.dataset.preselect;
+    delete reqSel.dataset.preselect;
+  }
 }
 
 // ══════════════════════════════════════════════
